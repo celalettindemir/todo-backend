@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: todo-test
+      tier: backend-test
+      track: stable
+  template:
+    metadata:
+      labels:
+        app: todo-test
+        tier: backend-test
+        track: stable
+    spec:
+      containers:
+        - name: todo-test
+          image: "gcr.io/<GCP_PROJECT_ID>/<CI_REGISTRY_GKE_IMAGE>:<VERSION>"
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+          - name: APP_ENV
+            value: test

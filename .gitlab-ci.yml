@@ -1,0 +1,147 @@
+image: golang:latest
+
+cache:
+  paths:
+    - /apt-cache
+    - /go/src/github.com
+    - /go/src/golang.org
+    - /go/src/google.golang.org
+    - /go/src/gopkg.in
+
+stages:
+  - build
+  - test
+  - package
+  - deploy2TestEnv
+  - integtest
+  - deployProd
+
+
+unit_tests:
+  stage: test
+  script:
+    - make test
+  rules:
+  - if: $CI_COMMIT_TAG || $IsVerifyPact
+
+pact_tests:
+  stage: test
+  script:
+    - curl -LO https://github.com/pact-foundation/pact-ruby-standalone/releases/download/v1.88.82/pact-1.88.82-linux-x86_64.tar.gz
+    - tar xzf pact-1.88.82-linux-x86_64.tar.gz --directory /
+    - chmod +xr -R /pact/bin
+    - export PATH=$PATH:/pact/bin
+    - APP_ENV=test VERSION=$CI_COMMIT_TAG go test ./pact
+  rules:
+  - if: $CI_COMMIT_TAG || $IsVerifyPact
+
+code_coverage:
+  stage: test
+  when: manual
+  script:
+    - make coverage
+  rules:
+  - if: $CI_COMMIT_TAG || $IsVerifyPact
+
+build:
+  stage: build
+  before_script:
+    - go mod download
+  script:
+    - make
+  artifacts:
+    paths:
+      - "bin"
+  rules:
+  - if: $CI_COMMIT_TAG || $IsVerifyPact
+
+docker package:
+  stage: package
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  when: manual
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_TAG}"
+  rules:
+  - if: $CI_COMMIT_TAG && $IsVerifyPact==null
+
+gcloud package:
+  stage: package
+  image: google/cloud-sdk:latest
+  script:
+    - echo ${GCP_SERVICE_ACCOUNT} > gcloud-service-key.json
+    - gcloud auth activate-service-account --key-file gcloud-service-key.json
+    - gcloud auth configure-docker
+    - gcloud config set project ${GCP_PROJECT_ID}
+    - gcloud builds submit --tag gcr.io/${GCP_PROJECT_ID}/${CI_REGISTRY_GKE_IMAGE}:${CI_COMMIT_TAG}
+  rules:
+  - if: $CI_COMMIT_TAG && $IsVerifyPact==null
+
+gcloud deploy2TestEnv:
+  stage: deploy2TestEnv
+  image: google/cloud-sdk
+  script:
+    - echo ${GCP_SERVICE_ACCOUNT} > ~/gcloud-service-key.json
+    - gcloud auth activate-service-account --key-file ~/gcloud-service-key.json
+    - gcloud config set project ${GCP_PROJECT_ID}
+    - gcloud container clusters get-credentials my-cluster --zone us-central1-a
+    - sed -i "s/<VERSION>/${CI_COMMIT_TAG}/g" test/backend-deployment.yaml
+    - sed -i "s/<GCP_PROJECT_ID>/${GCP_PROJECT_ID}/g" test/backend-deployment.yaml
+    - sed -i "s/<CI_REGISTRY_GKE_IMAGE>/${CI_REGISTRY_GKE_IMAGE}/g" test/backend-deployment.yaml
+    - sed -i "s/<VERSION>/${CI_COMMIT_TAG}/g" test/backend-deployment.yaml
+    - sed -i "s/<GCP_PROJECT_ID>/${GCP_PROJECT_ID}/g" test/backend-deployment.yaml
+    - sed -i "s/<CI_REGISTRY_GKE_IMAGE>/${CI_REGISTRY_GKE_IMAGE}/g" test/backend-deployment.yaml
+    - kubectl apply -f test/backend-deployment.yaml
+    - kubectl apply -f test/backend-service.yaml
+  rules:
+  - if: $CI_COMMIT_TAG && $IsVerifyPact==null
+  
+cdcPactTest:
+  stage: integtest
+  image: alpine
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - 'BADGE_ID="$(curl -s -H "Authorization: $BROKER_TOKEN" "${BROKER_URL}/can-i-deploy?pacticipant=Backend&version=${CI_COMMIT_TAG}"| jq ".summary.deployable" )"'
+    - echo $BADGE_ID
+    - >
+      if [ "$BADGE_ID" == "true" ]; then
+        exit 0
+      else
+        exit 1
+      fi
+  rules:
+  - if: $CI_COMMIT_TAG && $IsVerifyPact==null
+
+gcloud deployProd:
+  stage: deployProd
+  image: google/cloud-sdk
+  script:
+    - echo ${GCP_SERVICE_ACCOUNT} > ~/gcloud-service-key.json
+    - gcloud auth activate-service-account --key-file ~/gcloud-service-key.json
+    - gcloud config set project ${GCP_PROJECT_ID}
+    - gcloud container clusters get-credentials my-cluster --zone us-central1-a
+    - sed -i "s/<VERSION>/${CI_COMMIT_TAG}/g" deployment/backend-deployment.yaml
+    - sed -i "s/<GCP_PROJECT_ID>/${GCP_PROJECT_ID}/g" deployment/backend-deployment.yaml
+    - sed -i "s/<CI_REGISTRY_GKE_IMAGE>/${CI_REGISTRY_GKE_IMAGE}/g" deployment/backend-deployment.yaml
+    - kubectl apply -f deployment/backend-deployment.yaml
+    - kubectl apply -f deployment/backend-service.yaml
+  rules:
+  - if: $CI_COMMIT_TAG && $IsVerifyPact==null
+# destroy:
+#   stage: destroy
+#   image: google/cloud-sdk
+#   when: manual
+#   script:
+#     - echo $SERVICE_ACCOUNT | base64 -d > ~/gcloud-service-key.json
+#     - gcloud auth activate-service-account --key-file ~/gcloud-service-key.json
+#     - gcloud container clusters delete cluster-2 --zone us-central1-a --project ${GCP_PROJECT_ID} --quiet
+
+

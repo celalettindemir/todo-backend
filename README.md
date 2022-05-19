@@ -1,27 +1,29 @@
 # backend
 
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/main .
-
 ## Go Test
 
-go test -coverprofile=cover.txt ./...
-go tool cover -html=cover.txt -o cover.html
+- go test -coverprofile=cover.txt ./...
+- go tool cover -html=cover.txt -o cover.html
 
 ## Run
 
-go run .
+- go run .
+
+## Build and Run
+
+- CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/main .
 
 ## Dockerize
 
-docker build -t my-golang-app .
-docker run -p 3000:3000 my-golang-app
+- docker build -t my-golang-app .
+- docker run -p 3000:3000 my-golang-app
 
 ## Gcloud Registry
 
-gcloud builds submit --tag "gcr.io/galvanic-sphinx-341912/celal258-modanisa-back:v0.1.6"
+- gcloud builds submit --tag "gcr.io/galvanic-sphinx-341912/celal258-modanisa-back:v0.1.6"
 
-kubectl delete deploy backend
-kubectl delete svc backend-service
+- kubectl delete deploy backend
+- kubectl delete svc backend-service
 
 ## Environment
 
